@@ -1,6 +1,15 @@
 # Foundry Local
+> A web application for running local SLMs (small language models) using Neutron Server and Foundry Client.
 
-A web application for running local SLMs (small language models) using Neutron Server and Foundry Client.
+<!-- Javascript -->
+[![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
+[![Commitizen friendly](https://img.shields.io/badge/commitizen-friendly-brightgreen.svg)](http://commitizen.github.io/cz-cli/)
+![GitHub issues](https://img.shields.io/github/issues/sealjay/dating-rulebook)
+![GitHub](https://img.shields.io/github/license/sealjay/dating-rulebook)
+![GitHub Repo stars](https://img.shields.io/github/stars/sealjay/dating-rulebook?style=social)
+[![TypeScript](https://img.shields.io/badge/--3178C6?logo=typescript&logoColor=ffffff)](https://www.typescriptlang.org/)
+[![Azure](https://img.shields.io/badge/--3178C6?logo=microsoftazure&logoColor=ffffff)](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/?WT.mc_id=AI-MVP-5004204)
+[![React](https://img.shields.io/badge/--3178C6?logo=react&logoColor=ffffff)](https://reactjs.org/)
 
 ## About the App
 
