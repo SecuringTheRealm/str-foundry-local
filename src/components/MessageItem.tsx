@@ -1,6 +1,6 @@
 "use client";
 
-import { Message, Role } from "@/types/chat";
+import { Message, Role, RAGReference } from "@/types/chat";
 import ReactMarkdown from "react-markdown";
 import { useState, useEffect } from "react";
 
@@ -9,7 +9,14 @@ interface MessageItemProps {
 }
 
 const MessageItem = ({ message }: MessageItemProps) => {
-  const { role, content, timestamp, thoughtProcess, isThinking } = message;
+  const {
+    role,
+    content,
+    timestamp,
+    thoughtProcess,
+    isThinking,
+    ragReferences,
+  } = message;
   // Initial state will be expanded when thinking, but collapsed when complete
   const [isThoughtExpanded, setIsThoughtExpanded] = useState(isThinking);
   const isUser = role === "user";
@@ -67,6 +74,8 @@ const MessageItem = ({ message }: MessageItemProps) => {
     setIsThoughtExpanded(!isThoughtExpanded);
   };
 
+  const hasRagReferences = ragReferences && ragReferences.length > 0;
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
       <div
@@ -91,6 +100,35 @@ const MessageItem = ({ message }: MessageItemProps) => {
               {isUser ? "You" : agentInfo?.name}
             </div>
             <div className="text-xs text-[#666666]">{time}</div>
+
+            {/* RAG info icon */}
+            {hasRagReferences && (
+              <div className="ml-auto relative group">
+                <div className="w-5 h-5 rounded-full bg-[#FFB314] bg-opacity-20 flex items-center justify-center text-[#FF5800] cursor-help">
+                  <span className="text-xs font-bold">i</span>
+                  <div className="absolute z-10 right-0 mt-1 w-max max-w-[200px] bg-white border border-[#E5E5E5] rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2 text-xs text-[#666666]">
+                    <p className="font-medium text-[#FF5800] mb-1">
+                      Document References:
+                    </p>
+                    <ul className="space-y-1">
+                      {ragReferences?.map((ref, index) => (
+                        <li key={index} className="flex flex-col">
+                          <span className="font-medium">
+                            {ref.documentName}
+                          </span>
+                          <span className="text-[#999999]">
+                            Row ID: {ref.rowId}
+                          </span>
+                          <span className="text-[#999999]">
+                            Match: {Math.round(ref.similarity * 100)}%
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Display thinking process live as it happens - only if we have actual thought content */}

@@ -22,6 +22,11 @@ export interface IngestedFileInfo {
     ingestTime: Date;
 }
 
+export interface RAGStats {
+    totalSearches: number;
+    totalMatches: number;
+}
+
 export class RAGService {
     private db: Database.Database | null = null;
     private dbPath: string = path.join(process.cwd(), 'rag.db');
@@ -31,6 +36,8 @@ export class RAGService {
     private hasContent: boolean = false;
     private ingestedFiles: IngestedFileInfo[] = [];
     private lastIngestTime: Date | null = null;
+    private searchCount: number = 0;
+    private matchCount: number = 0;
 
     constructor() {
         this.openai = new OpenAI({
@@ -274,6 +281,9 @@ export class RAGService {
         }
 
         try {
+            // Increment search counter
+            this.searchCount++;
+
             // Get query embedding
             const queryEmbedding = await this.getEmbedding(query);
 
@@ -297,14 +307,31 @@ export class RAGService {
             });
 
             // Sort by similarity and take the top results
-            return scoredDocuments
+            const results = scoredDocuments
                 .sort((a, b) => b.similarity - a.similarity)
                 .slice(0, limit)
                 .map(({ content, similarity }) => ({ content, similarity }));
+
+            // Increment match counter if we found results
+            if (results.length > 0) {
+                this.matchCount += results.length;
+            }
+
+            return results;
         } catch (error) {
             console.error('Error searching for documents:', error);
             return [];
         }
+    }
+
+    /**
+     * Get RAG usage statistics
+     */
+    public getRAGStats(): RAGStats {
+        return {
+            totalSearches: this.searchCount,
+            totalMatches: this.matchCount
+        };
     }
 
     /**
@@ -320,10 +347,12 @@ export class RAGService {
     public getIngestedFilesInfo(): {
         files: IngestedFileInfo[];
         lastIngestTime: Date | null;
+        stats: RAGStats;
     } {
         return {
             files: [...this.ingestedFiles],
-            lastIngestTime: this.lastIngestTime
+            lastIngestTime: this.lastIngestTime,
+            stats: this.getRAGStats()
         };
     }
 

@@ -2,7 +2,7 @@
 
 import { Agent, WorkflowStage, WorkflowState } from "@/types/chat";
 import { useEffect, useState } from "react";
-import { IngestedFileInfo } from "@/services/ragService";
+import { IngestedFileInfo, RAGStats } from "@/services/ragService";
 
 interface AgentWorkflowProps {
   agents: Agent[];
@@ -18,7 +18,12 @@ const AgentWorkflow = ({
   const [fileInfo, setFileInfo] = useState<{
     files: IngestedFileInfo[];
     lastIngestTime: Date | null;
-  }>({ files: [], lastIngestTime: null });
+    stats: RAGStats;
+  }>({
+    files: [],
+    lastIngestTime: null,
+    stats: { totalSearches: 0, totalMatches: 0 },
+  });
 
   useEffect(() => {
     // Fetch ingested file information when component mounts
@@ -35,7 +40,8 @@ const AgentWorkflow = ({
           const lastIngestTime = data.lastIngestTime
             ? new Date(data.lastIngestTime)
             : null;
-          setFileInfo({ files, lastIngestTime });
+          const stats = data.stats || { totalSearches: 0, totalMatches: 0 };
+          setFileInfo({ files, lastIngestTime, stats });
         }
       } catch (error) {
         console.error("Failed to fetch ingested file info:", error);
@@ -43,6 +49,12 @@ const AgentWorkflow = ({
     };
 
     fetchFileInfo();
+
+    // Poll every 10 seconds to refresh RAG stats
+    const intervalId = setInterval(fetchFileInfo, 10000);
+
+    // Cleanup interval on component unmount
+    return () => clearInterval(intervalId);
   }, []);
 
   const getActiveAgentName = (): string => {
@@ -161,6 +173,54 @@ const AgentWorkflow = ({
               {fileInfo.lastIngestTime
                 ? formatDate(fileInfo.lastIngestTime)
                 : "Never"}
+            </div>
+
+            {/* RAG Usage Statistics */}
+            <div className="mt-1 flex flex-wrap gap-x-6 gap-y-1">
+              <div className="flex items-center gap-1">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4 text-[#FF5800]"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+                <span className="text-xs text-[#666666]">
+                  <span className="font-medium">
+                    {fileInfo.stats.totalSearches}
+                  </span>{" "}
+                  RAG searches
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="w-4 h-4 text-[#FF5800]"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                <span className="text-xs text-[#666666]">
+                  <span className="font-medium">
+                    {fileInfo.stats.totalMatches}
+                  </span>{" "}
+                  document matches
+                </span>
+              </div>
             </div>
 
             <div className="mt-2">

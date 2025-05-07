@@ -1,5 +1,11 @@
 export type Role = 'user' | 'system' | 'agent' | 'concierge' | 'researcher' | 'copywriter' | 'reviewer';
 
+export interface RAGReference {
+  documentName: string;
+  rowId: string;
+  similarity: number;
+}
+
 export interface Message {
   id: string;
   role: Role;
@@ -8,6 +14,7 @@ export interface Message {
   agentId?: string; // Track which agent sent the message
   thoughtProcess?: string; // Store the thought process content (<think>...</think>)
   isThinking?: boolean; // Flag to indicate if currently in thinking mode
+  ragReferences?: RAGReference[]; // Store RAG document references if used
 }
 
 export interface Agent {
