@@ -6,6 +6,8 @@ export interface Message {
   content: string;
   timestamp: Date;
   agentId?: string; // Track which agent sent the message
+  thoughtProcess?: string; // Store the thought process content (<think>...</think>)
+  isThinking?: boolean; // Flag to indicate if currently in thinking mode
 }
 
 export interface Agent {

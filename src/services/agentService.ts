@@ -112,6 +112,105 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
   }
 
   /**
+   * Processes a user message and returns a stream for real-time UI updates
+   */
+  async streamMessage(request: ChatRequest): Promise<ReadableStream<Uint8Array>> {
+    const { message, systemPrompt, history, agentId, workflowState } = request;
+
+    // Create a transform stream to process the OpenAI stream
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+
+    // Create a stream to send to the client
+    const stream = new TransformStream();
+    const writer = stream.writable.getWriter();
+
+    try {
+      // Determine which agent should respond based on the workflow stage
+      let currentAgentRole: Role = 'agent';
+      let promptToUse = systemPrompt || 'You are a helpful AI assistant.';
+
+      if (workflowState) {
+        switch (workflowState.stage) {
+          case 'inquiry':
+            currentAgentRole = 'concierge';
+            promptToUse = this.agentPrompts.concierge;
+            break;
+          case 'research':
+            currentAgentRole = 'researcher';
+            promptToUse = this.agentPrompts.researcher + `\nThe topic to research is: ${workflowState.topic}`;
+            break;
+          case 'writing':
+            currentAgentRole = 'copywriter';
+            promptToUse = this.agentPrompts.copywriter + `\nHere are the research notes to use:\n${workflowState.researchNotes}`;
+            break;
+          case 'review':
+            currentAgentRole = 'reviewer';
+            promptToUse = this.agentPrompts.reviewer + `\nHere is the draft to review:\n${workflowState.draft}`;
+            break;
+        }
+      }
+
+      // Convert history to OpenAI format
+      const formattedHistory = history.map(msg => ({
+        role: msg.role === 'agent' || msg.role === 'concierge' || msg.role === 'researcher' ||
+          msg.role === 'copywriter' || msg.role === 'reviewer' ? 'assistant' : msg.role,
+        content: msg.content,
+      }));
+
+      // Create a conversation with system prompt and history
+      const messages = [
+        { role: 'system', content: promptToUse },
+        ...formattedHistory,
+        { role: 'user', content: message },
+      ];
+
+      console.log('model:', process.env.FOUNDRY_LOCAL_MODEL || 'Phi-4-mini-cpu-int4-rtn-block-32-acc-level-4-onnx');
+
+      // Call OpenAI API for streaming chat completion
+      const openaiStream = await openai.chat.completions.create({
+        model: process.env.FOUNDRY_LOCAL_MODEL || 'Phi-4-mini-cpu-int4-rtn-block-32-acc-level-4-onnx',
+        messages: messages as any,
+        max_tokens: 1500,
+        stream: true,
+      });
+
+      // Process the stream and forward it to the client
+      (async () => {
+        let fullResponse = '';
+
+        try {
+          for await (const chunk of openaiStream) {
+            const content = chunk.choices[0]?.delta?.content || '';
+            fullResponse += content;
+
+            // Send the content chunk to the client
+            await writer.write(encoder.encode(content));
+          }
+
+          // Send the full response in a special "done" message
+          const doneMessage = JSON.stringify({ done: true, fullResponse });
+          await writer.write(encoder.encode(`\n${doneMessage}`));
+        } catch (error) {
+          console.error('Error streaming response:', error);
+          const errorMessage = JSON.stringify({ error: 'Error streaming response' });
+          await writer.write(encoder.encode(`\n${errorMessage}`));
+        } finally {
+          await writer.close();
+        }
+      })();
+
+      return stream.readable;
+    } catch (error: any) {
+      console.error('Error setting up stream:', error);
+      const errorMessage = `Error: ${error.message || 'An unknown error occurred'}`;
+      await writer.write(encoder.encode(errorMessage));
+      await writer.close();
+      return stream.readable;
+    }
+  }
+
+  /**
    * Automatically advances the workflow to the next stage without user input
    */
   async advanceWorkflow(request: {

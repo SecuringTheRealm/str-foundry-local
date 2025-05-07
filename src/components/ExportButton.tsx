@@ -43,6 +43,20 @@ const ExportButton = ({ messages, workflowState }: ExportButtonProps) => {
         const time = formatDate(new Date(msg.timestamp));
 
         content += `### ${role} (${time})\n\n`;
+
+        // Add thought process if available
+        if (msg.thoughtProcess) {
+          content += `> **Thought Process:** _(hidden by default in UI)_\n`;
+          content += `> \n`;
+          // Format thought process content with indentation for markdown blockquote
+          const thoughtLines = msg.thoughtProcess.split("\n");
+          thoughtLines.forEach((line) => {
+            content += `> ${line}\n`;
+          });
+          content += `> \n\n`;
+        }
+
+        // Add main message content
         content += `${msg.content}\n\n`;
       });
 
