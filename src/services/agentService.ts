@@ -1,5 +1,6 @@
 import { OpenAI } from 'openai';
 import { Message, WorkflowState, Role } from '@/types/chat';
+import ragService from './ragService';
 
 // Initialize Azure OpenAI client with the API key and endpoint from environment variables
 const openai = new OpenAI({
@@ -29,6 +30,14 @@ Organize your research in clear sections with important points highlighted.
 Cite sources where appropriate, and mention any areas where information might be limited or uncertain.
 Keep your tone informative and objective.`,
 
+    researcherWithRag: `You are a Researcher agent. You have been given a topic to research.
+Use the provided relevant documents as your primary source of information on this topic.
+Present comprehensive, factual information about the topic.
+Include relevant data, historical context, current developments, and different perspectives from the provided documents.
+Organize your research in clear sections with important points highlighted.
+Cite the provided information where appropriate, and mention any areas where information might be limited or uncertain.
+Keep your tone informative and objective.`,
+
     copywriter: `You are a Copywriter agent. You have been given research notes on a topic.
 Transform these notes into engaging, well-written content.
 Structure the content with clear headings, an introduction, main sections, and a conclusion.
@@ -47,6 +56,26 @@ Suggest specific improvements with examples where possible.
 Be thorough but respectful, acknowledging the strengths of the work while proposing enhancements.`
   };
 
+  private isRagInitialized: boolean = false;
+
+  constructor() {
+    // Initialize RAG service asynchronously
+    this.initializeRag();
+  }
+
+  /**
+   * Initialize the RAG service
+   */
+  private async initializeRag(): Promise<void> {
+    try {
+      this.isRagInitialized = await ragService.initialize();
+      console.log(`RAG service initialized with content: ${this.isRagInitialized}`);
+    } catch (error) {
+      console.error('Failed to initialize RAG service:', error);
+      this.isRagInitialized = false;
+    }
+  }
+
   /**
    * Processes a user message and generates a response based on the current workflow state
    */
@@ -57,6 +86,7 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
       // Determine which agent should respond based on the workflow stage
       let currentAgentRole: Role = 'agent';
       let promptToUse = systemPrompt || 'You are a helpful AI assistant.';
+      let relevantDocuments: string = '';
 
       if (workflowState) {
         switch (workflowState.stage) {
@@ -66,7 +96,30 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
             break;
           case 'research':
             currentAgentRole = 'researcher';
-            promptToUse = this.agentPrompts.researcher + `\nThe topic to research is: ${workflowState.topic}`;
+
+            // If RAG is available and the topic is set, use it to enhance research
+            if (this.isRagInitialized && workflowState.topic) {
+              try {
+                const results = await ragService.search(workflowState.topic, 3);
+
+                if (results.length > 0) {
+                  relevantDocuments = results.map(doc => doc.content).join('\n\n');
+                  promptToUse = this.agentPrompts.researcherWithRag +
+                    `\nThe topic to research is: ${workflowState.topic}\n\n` +
+                    `Relevant documents:\n${relevantDocuments}`;
+                } else {
+                  promptToUse = this.agentPrompts.researcher +
+                    `\nThe topic to research is: ${workflowState.topic}`;
+                }
+              } catch (error) {
+                console.error('Error using RAG for research:', error);
+                promptToUse = this.agentPrompts.researcher +
+                  `\nThe topic to research is: ${workflowState.topic}`;
+              }
+            } else {
+              promptToUse = this.agentPrompts.researcher +
+                `\nThe topic to research is: ${workflowState.topic}`;
+            }
             break;
           case 'writing':
             currentAgentRole = 'copywriter';
@@ -129,6 +182,7 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
       // Determine which agent should respond based on the workflow stage
       let currentAgentRole: Role = 'agent';
       let promptToUse = systemPrompt || 'You are a helpful AI assistant.';
+      let relevantDocuments: string = '';
 
       if (workflowState) {
         switch (workflowState.stage) {
@@ -138,7 +192,30 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
             break;
           case 'research':
             currentAgentRole = 'researcher';
-            promptToUse = this.agentPrompts.researcher + `\nThe topic to research is: ${workflowState.topic}`;
+
+            // If RAG is available and the topic is set, use it to enhance research
+            if (this.isRagInitialized && workflowState.topic) {
+              try {
+                const results = await ragService.search(workflowState.topic, 3);
+
+                if (results.length > 0) {
+                  relevantDocuments = results.map(doc => doc.content).join('\n\n');
+                  promptToUse = this.agentPrompts.researcherWithRag +
+                    `\nThe topic to research is: ${workflowState.topic}\n\n` +
+                    `Relevant documents:\n${relevantDocuments}`;
+                } else {
+                  promptToUse = this.agentPrompts.researcher +
+                    `\nThe topic to research is: ${workflowState.topic}`;
+                }
+              } catch (error) {
+                console.error('Error using RAG for research:', error);
+                promptToUse = this.agentPrompts.researcher +
+                  `\nThe topic to research is: ${workflowState.topic}`;
+              }
+            } else {
+              promptToUse = this.agentPrompts.researcher +
+                `\nThe topic to research is: ${workflowState.topic}`;
+            }
             break;
           case 'writing':
             currentAgentRole = 'copywriter';
