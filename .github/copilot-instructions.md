@@ -7,7 +7,6 @@
 - Prefer immutable data (const, readonly)
 - Use optional chaining (?.) and nullish coalescing (??) operators
 
-
 ## Writing and labelling guidelines
 - Use US English for all code and documentation
 - Write clear and concise comments

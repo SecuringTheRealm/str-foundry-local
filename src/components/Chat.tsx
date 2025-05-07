@@ -180,7 +180,8 @@ export default function Chat() {
       // from the appropriate agent after a short delay
       if (
         (workflowState.stage === "research" ||
-          workflowState.stage === "writing") &&
+          workflowState.stage === "writing" ||
+          workflowState.stage === "review") &&
         transitionMessage
       ) {
         setIsLoading(true);
@@ -189,11 +190,20 @@ export default function Chat() {
             await streamMessage(
               workflowState.stage === "research"
                 ? `Please research ${workflowState.topic}`
-                : `Please write content based on these notes: ${workflowState.researchNotes?.substring(
+                : workflowState.stage === "writing"
+                ? `Please write content based on these notes: ${workflowState.researchNotes?.substring(
+                    0,
+                    500
+                  )}...`
+                : `Please review this draft and provide feedback: ${workflowState.draft?.substring(
                     0,
                     500
                   )}...`,
-              workflowState.stage === "research" ? "researcher" : "copywriter"
+              workflowState.stage === "research"
+                ? "researcher"
+                : workflowState.stage === "writing"
+                ? "copywriter"
+                : "reviewer"
             );
           } catch (error) {
             console.error("Error:", error);
@@ -262,7 +272,7 @@ export default function Chat() {
     const messageId = uuidv4();
 
     // Get the current agent role
-    const currentAgentRole = agentId as any;
+    const currentAgentRole = agentId as Message["role"];
 
     // Initialize a streaming message with empty content
     const initialMessage: Message = {
@@ -340,10 +350,9 @@ export default function Chat() {
         }
 
         // Process thinking tokens in the chunk
-        let processedChunk = chunk;
-        let updatedContent = accumulatedContent;
+        const updatedContent = accumulatedContent;
         let updatedThought = accumulatedThought;
-        let updatedIsThinking = isCurrentlyThinking;
+        let updatedIsThinking: boolean = isCurrentlyThinking;
 
         // Handle <think> opening tag
         if (chunk.includes("<think>") && !isCurrentlyThinking) {
@@ -351,7 +360,7 @@ export default function Chat() {
           const parts = chunk.split("<think>");
           if (parts.length > 1) {
             // Add everything before the <think> tag to content
-            updatedContent += parts[0];
+            accumulatedContent += parts[0];
             // Start accumulating thought content
             updatedThought += parts[1];
             updatedIsThinking = true;
@@ -364,7 +373,7 @@ export default function Chat() {
             // Add everything before the </think> tag to thought
             updatedThought += parts[0];
             // Add everything after the </think> tag to content
-            updatedContent += parts[1];
+            accumulatedContent += parts[1];
             updatedIsThinking = false;
           }
         }
@@ -374,11 +383,10 @@ export default function Chat() {
           updatedThought += chunk;
         } else {
           // Add to content accumulation
-          updatedContent += chunk;
+          accumulatedContent += chunk;
         }
 
         // Update accumulated values
-        accumulatedContent = updatedContent;
         accumulatedThought = updatedThought;
         isCurrentlyThinking = updatedIsThinking;
 
