@@ -21,38 +21,33 @@ const MessageItem = ({ message }: MessageItemProps) => {
       case "concierge":
         return {
           name: "Concierge",
-          bgColor: "bg-gradient-to-r from-[#FF5800] to-[#FFB314]",
-          textColor: "text-white",
-          timeColor: "text-white text-opacity-80",
+          accentColor: "bg-gradient-to-r from-[#FF5800] to-[#FFB314]",
+          borderColor: "border-[#FF5800]",
         };
       case "researcher":
         return {
           name: "Researcher",
-          bgColor: "bg-gradient-to-r from-[#FF5800] to-[#890078]",
-          textColor: "text-white",
-          timeColor: "text-white text-opacity-80",
+          accentColor: "bg-gradient-to-r from-[#FF5800] to-[#890078]",
+          borderColor: "border-[#FF5800]",
         };
       case "copywriter":
         return {
           name: "Copywriter",
-          bgColor: "bg-gradient-to-r from-[#FF5800] to-[#CE0569]",
-          textColor: "text-white",
-          timeColor: "text-white text-opacity-80",
+          accentColor: "bg-gradient-to-r from-[#FF5800] to-[#CE0569]",
+          borderColor: "border-[#FF5800]",
         };
       case "reviewer":
         return {
           name: "Reviewer",
-          bgColor: "bg-gradient-to-r from-[#FF5800] to-[#C80000]",
-          textColor: "text-white",
-          timeColor: "text-white text-opacity-80",
+          accentColor: "bg-gradient-to-r from-[#FF5800] to-[#C80000]",
+          borderColor: "border-[#FF5800]",
         };
       case "agent":
       default:
         return {
           name: "Agent",
-          bgColor: "bg-white border border-[#E5E5E5]",
-          textColor: "text-[#333333]",
-          timeColor: "text-[#666666]",
+          accentColor: "bg-[#E5E5E5]",
+          borderColor: "border-[#E5E5E5]",
         };
     }
   };
@@ -62,33 +57,32 @@ const MessageItem = ({ message }: MessageItemProps) => {
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
       <div
-        className={`max-w-[80%] ${
-          isUser ? "bg-[#FF5800]" : agentInfo?.bgColor
-        } rounded-lg p-3 shadow`}
+        className={`max-w-[80%] bg-white rounded-lg shadow overflow-hidden border ${
+          isUser ? "border-[#FF5800]" : agentInfo?.borderColor
+        }`}
       >
-        <div className="flex items-center gap-2 mb-1">
-          <div
-            className={`text-sm font-semibold ${
-              isUser ? "text-white" : agentInfo?.textColor
-            }`}
-          >
-            {isUser ? "You" : agentInfo?.name}
-          </div>
-          <div
-            className={`text-xs ${
-              isUser ? "text-white text-opacity-80" : agentInfo?.timeColor
-            }`}
-          >
-            {time}
-          </div>
-        </div>
-
+        {/* Gradient accent bar at the top */}
         <div
-          className={`prose prose-sm ${
-            isUser ? "prose-invert" : ""
-          } max-w-none`}
-        >
-          <ReactMarkdown>{content}</ReactMarkdown>
+          className={`h-2 w-full ${
+            isUser ? "bg-[#FF5800]" : agentInfo?.accentColor
+          }`}
+        ></div>
+
+        <div className="p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <div
+              className={`text-sm font-semibold ${
+                isUser ? "text-[#FF5800]" : "text-[#333333]"
+              }`}
+            >
+              {isUser ? "You" : agentInfo?.name}
+            </div>
+            <div className="text-xs text-[#666666]">{time}</div>
+          </div>
+
+          <div className="prose prose-sm max-w-none text-[#333333]">
+            <ReactMarkdown>{content}</ReactMarkdown>
+          </div>
         </div>
       </div>
     </div>
