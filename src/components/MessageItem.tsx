@@ -125,6 +125,18 @@ const MessageItem = ({ message }: MessageItemProps) => {
                           <span className="text-[#999999]">
                             Match: {Math.round(ref.similarity * 100)}%
                           </span>
+                          <span
+                            className={`text-xs ${
+                              ref.sourceType === "vector"
+                                ? "text-[#008376]"
+                                : "text-[#47800A]"
+                            }`}
+                          >
+                            Source:{" "}
+                            {ref.sourceType === "vector"
+                              ? "Vector search"
+                              : "Text search"}
+                          </span>
                         </li>
                       ))}
                     </ul>

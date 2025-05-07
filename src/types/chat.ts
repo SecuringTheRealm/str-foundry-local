@@ -4,6 +4,7 @@ export interface RAGReference {
   documentName: string;
   rowId: string;
   similarity: number;
+  sourceType: 'vector' | 'text'; // Added source type to track search method
 }
 
 export interface Message {

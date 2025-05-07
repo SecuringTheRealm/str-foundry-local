@@ -1,8 +1,8 @@
 import { OpenAI } from 'openai';
 import { Message, WorkflowState, Role, RAGReference } from '@/types/chat';
-import ragService from './ragService';
+import ragService, { RAGSearchResult } from './ragService';
 
-// Initialize Azure OpenAI client with the API key and endpoint from environment variables
+// Initialize OpenAI client with the API key and endpoint from environment variables
 const openai = new OpenAI({
   apiKey: 'not-needed-for-local',
   baseURL: 'http://localhost:5272/v1',
@@ -18,42 +18,57 @@ export interface ChatRequest {
 
 export class AgentService {
   private agentPrompts = {
-    concierge: `You are a helpful Concierge agent. Your job is to inquire about what topic the user would like to learn about.
-Ask thoughtful questions to understand the user's interests and needs.
-Once you have a clear understanding of what the user wants, summarize it concisely and confirm that's what they want.
-Your goal is to help define a clear topic for research.`,
+    concierge: `You are the Concierge agent, designed to help users identify topics they'd like to explore further.
+Your primary goal is to understand what the user is interested in and help define a clear research topic.
+Once you've identified a potential topic, propose it to the user clearly.
+Keep your responses conversational, friendly, and helpful.
+Ask clarifying questions when needed to narrow down the topic.`,
 
-    researcher: `You are a Researcher agent. You have been given a topic to research.
-Present comprehensive, factual information about the topic.
-Include relevant data, historical context, current developments, and different perspectives.
-Organize your research in clear sections with important points highlighted.
-Cite sources where appropriate, and mention any areas where information might be limited or uncertain.
-Keep your tone informative and objective.`,
+    conciergeWithRag: `You are the Concierge agent, designed to help users identify topics they'd like to explore further.
+Your primary goal is to understand what the user is interested in and help define a clear research topic.
+Once you've identified a potential topic, propose it to the user clearly.
+Keep your responses conversational, friendly, and helpful.
+Ask clarifying questions when needed to narrow down the topic.
 
-    researcherWithRag: `You are a Researcher agent. You have been given a topic to research.
+Use the provided relevant documents to suggest potential research topics that match what's available in our knowledge base.
+Refer to this information to help guide the user toward topics where we have good data available.`,
+
+    researcher: `You are the Researcher agent, designed to gather information on a specific topic.
+Your goal is to collect key information, statistics, and insights that will be useful for content creation.
+Focus on relevant facts, important context, and valuable details.
+Be thorough in your research and present information in a structured way.
+If you don't know something, acknowledge that and focus on what you do know.`,
+
+    researcherWithRag: `You are the Researcher agent, designed to gather information on a specific topic.
+Your goal is to collect key information, statistics, and insights that will be useful for content creation.
+Focus on relevant facts, important context, and valuable details.
+Be thorough in your research and present information in a structured way.
+If you don't know something, acknowledge that and focus on what you do know.
+
 Use the provided relevant documents as your primary source of information on this topic.
-Present comprehensive, factual information about the topic.
-Include relevant data, historical context, current developments, and different perspectives from the provided documents.
-Organize your research in clear sections with important points highlighted.
-Cite the provided information where appropriate, and mention any areas where information might be limited or uncertain.
-Keep your tone informative and objective.`,
+Extract key insights, statistics, and factual information from these documents to create comprehensive research notes.`,
 
-    copywriter: `You are a Copywriter agent. You have been given research notes on a topic.
-Transform these notes into engaging, well-written content.
-Structure the content with clear headings, an introduction, main sections, and a conclusion.
-Use an appropriate tone for the subject matter and intended audience.
-Make complex information accessible while maintaining accuracy.
-Your writing should be polished, error-free, and ready for publication.`,
+    copywriter: `You are the Copywriter agent, designed to turn research into compelling content.
+Your goal is to craft engaging, well-structured content based on the research notes provided.
+Focus on creating a clear narrative that flows logically and keeps the reader engaged.
+Use appropriate headings, paragraphs, and formatting to improve readability.
+Be creative while staying true to the facts from the research.`,
 
-    reviewer: `You are a Reviewer agent. You have been given a draft of written content to review.
-Provide constructive criticism focusing on:
-- Content accuracy and completeness
-- Structure and flow
-- Language usage and clarity
-- Audience appropriateness
-- Overall impact and effectiveness
-Suggest specific improvements with examples where possible.
-Be thorough but respectful, acknowledging the strengths of the work while proposing enhancements.`
+    reviewer: `You are the Reviewer agent, designed to provide feedback on drafted content.
+Your goal is to help improve the draft by identifying areas for enhancement and correction.
+Focus on clarity, accuracy, flow, and overall effectiveness of the content.
+Provide constructive criticism and specific suggestions for improvement.
+Be thorough but respectful, acknowledging the strengths of the work while proposing enhancements.`,
+
+    reviewerWithRag: `You are the Reviewer agent, designed to provide feedback on drafted content.
+Your goal is to help improve the draft by identifying areas for enhancement and correction.
+Focus on clarity, accuracy, flow, and overall effectiveness of the content.
+Provide constructive criticism and specific suggestions for improvement.
+Be thorough but respectful, acknowledging the strengths of the work while proposing enhancements.
+
+Use the provided relevant documents to fact-check the draft and ensure accuracy.
+If you find any inconsistencies between the draft and the source materials, highlight them in your feedback.
+Suggest ways to incorporate additional relevant information from the source documents if it would strengthen the content.`
   };
 
   private isRagInitialized: boolean = false;
@@ -74,6 +89,87 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
       console.error('Failed to initialize RAG service:', error);
       this.isRagInitialized = false;
     }
+  }
+
+  /**
+   * Process RAG search results and extract references
+   */
+  private processRAGResults(results: RAGSearchResult[]): {
+    relevantDocuments: string;
+    ragReferences: RAGReference[];
+  } {
+    const relevantDocuments = results.map(doc => doc.content).join('\n\n');
+    const ragReferences: RAGReference[] = [];
+
+    // Extract document metadata for display
+    results.forEach(doc => {
+      try {
+        const metadataStr = doc.content.split('\n')[0]; // Assuming first line has metadata
+        const documentName = metadataStr.includes(':') ?
+          metadataStr.split(':')[1].trim() : 'Unknown';
+
+        // Extract a unique ID from the content or use a hash
+        const rowIdMatch = doc.content.match(/Row ID: (\d+)/i);
+        const rowId = rowIdMatch ? rowIdMatch[1] :
+          `doc-${Math.random().toString(36).substring(2, 10)}`;
+
+        ragReferences.push({
+          documentName,
+          rowId,
+          similarity: doc.similarity,
+          sourceType: doc.sourceType,
+        });
+      } catch (err) {
+        console.error('Error processing RAG document metadata:', err);
+      }
+    });
+
+    return { relevantDocuments, ragReferences };
+  }
+
+  /**
+   * Enhance a prompt with RAG results if available
+   *
+   * @param searchQuery The query to search for in the RAG system
+   * @param basePrompt The base prompt to enhance
+   * @param ragPrompt The RAG-enhanced version of the prompt
+   * @returns Object containing the enhanced prompt and RAG info
+   */
+  private async enhancePromptWithRAG(
+    searchQuery: string,
+    basePrompt: string,
+    ragPrompt: string
+  ): Promise<{
+    promptToUse: string;
+    relevantDocuments: string;
+    ragReferences: RAGReference[];
+    ragSearchMade: boolean;
+  }> {
+    let promptToUse = basePrompt;
+    let relevantDocuments = '';
+    let ragReferences: RAGReference[] = [];
+    let ragSearchMade = false;
+
+    if (!this.isRagInitialized) {
+      return { promptToUse, relevantDocuments, ragReferences, ragSearchMade };
+    }
+
+    try {
+      ragSearchMade = true; // Mark that a search was attempted
+      const results = await ragService.search(searchQuery, 3);
+
+      if (results.length > 0) {
+        const processedResults = this.processRAGResults(results);
+        relevantDocuments = processedResults.relevantDocuments;
+        ragReferences = processedResults.ragReferences;
+
+        promptToUse = `${ragPrompt}\n\nRelevant documents:\n${relevantDocuments}`;
+      }
+    } catch (error) {
+      console.error('Error using RAG for prompt enhancement:', error);
+    }
+
+    return { promptToUse, relevantDocuments, ragReferences, ragSearchMade };
   }
 
   /**
@@ -98,66 +194,54 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
         switch (workflowState.stage) {
           case 'inquiry':
             currentAgentRole = 'concierge';
-            promptToUse = this.agentPrompts.concierge;
+            // Use RAG to help with topic suggestions based on available knowledge
+            const conciergeRagResult = await this.enhancePromptWithRAG(
+              message,
+              this.agentPrompts.concierge,
+              this.agentPrompts.conciergeWithRag
+            );
+            promptToUse = conciergeRagResult.promptToUse;
+            ragReferences = conciergeRagResult.ragReferences;
+            ragSearchMade = conciergeRagResult.ragSearchMade;
             break;
+
           case 'research':
             currentAgentRole = 'researcher';
-
-            // If RAG is available and the topic is set, use it to enhance research
-            if (this.isRagInitialized && workflowState.topic) {
-              try {
-                ragSearchMade = true; // Mark that a search was attempted
-                const results = await ragService.search(workflowState.topic, 3);
-
-                if (results.length > 0) {
-                  relevantDocuments = results.map(doc => doc.content).join('\n\n');
-
-                  // Extract document metadata for display
-                  results.forEach(doc => {
-                    try {
-                      const metadataStr = doc.content.split('\n')[0]; // Assuming first line has metadata
-                      const documentName = metadataStr.includes(':') ?
-                        metadataStr.split(':')[1].trim() : 'Unknown';
-
-                      // Extract a unique ID from the content or use a hash
-                      const rowIdMatch = doc.content.match(/Row ID: (\d+)/i);
-                      const rowId = rowIdMatch ? rowIdMatch[1] :
-                        `doc-${Math.random().toString(36).substring(2, 10)}`;
-
-                      ragReferences.push({
-                        documentName,
-                        rowId,
-                        similarity: doc.similarity,
-                      });
-                    } catch (err) {
-                      console.error('Error processing RAG document metadata:', err);
-                    }
-                  });
-
-                  promptToUse = this.agentPrompts.researcherWithRag +
-                    `\nThe topic to research is: ${workflowState.topic}\n\n` +
-                    `Relevant documents:\n${relevantDocuments}`;
-                } else {
-                  promptToUse = this.agentPrompts.researcher +
-                    `\nThe topic to research is: ${workflowState.topic}`;
-                }
-              } catch (error) {
-                console.error('Error using RAG for research:', error);
-                promptToUse = this.agentPrompts.researcher +
-                  `\nThe topic to research is: ${workflowState.topic}`;
-              }
+            // Use RAG to enhance research with relevant documents
+            if (workflowState.topic) {
+              const researchRagResult = await this.enhancePromptWithRAG(
+                workflowState.topic,
+                this.agentPrompts.researcher + `\nThe topic to research is: ${workflowState.topic}`,
+                this.agentPrompts.researcherWithRag + `\nThe topic to research is: ${workflowState.topic}`
+              );
+              promptToUse = researchRagResult.promptToUse;
+              ragReferences = researchRagResult.ragReferences;
+              ragSearchMade = researchRagResult.ragSearchMade;
             } else {
-              promptToUse = this.agentPrompts.researcher +
-                `\nThe topic to research is: ${workflowState.topic}`;
+              promptToUse = this.agentPrompts.researcher;
             }
             break;
+
           case 'writing':
             currentAgentRole = 'copywriter';
             promptToUse = this.agentPrompts.copywriter + `\nHere are the research notes to use:\n${workflowState.researchNotes}`;
             break;
+
           case 'review':
             currentAgentRole = 'reviewer';
-            promptToUse = this.agentPrompts.reviewer + `\nHere is the draft to review:\n${workflowState.draft}`;
+            // Use RAG to help with fact-checking during review
+            if (workflowState.draft) {
+              const reviewRagResult = await this.enhancePromptWithRAG(
+                workflowState.draft,
+                this.agentPrompts.reviewer + `\nHere is the draft to review:\n${workflowState.draft}`,
+                this.agentPrompts.reviewerWithRag + `\nHere is the draft to review:\n${workflowState.draft}`
+              );
+              promptToUse = reviewRagResult.promptToUse;
+              ragReferences = reviewRagResult.ragReferences;
+              ragSearchMade = reviewRagResult.ragSearchMade;
+            } else {
+              promptToUse = this.agentPrompts.reviewer;
+            }
             break;
         }
       }
@@ -176,7 +260,7 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
         { role: 'user', content: message },
       ];
 
-      // Call Azure OpenAI API for chat completion
+      // Call OpenAI API for chat completion
       const completion = await openai.chat.completions.create({
         model: process.env.FOUNDRY_LOCAL_MODEL || 'Phi-4-mini-cpu-int4-rtn-block-32-acc-level-4-onnx', // Use the deployment name as the model
         messages: messages as any,
@@ -232,66 +316,54 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
         switch (workflowState.stage) {
           case 'inquiry':
             currentAgentRole = 'concierge';
-            promptToUse = this.agentPrompts.concierge;
+            // Use RAG to help with topic suggestions based on available knowledge
+            const conciergeRagResult = await this.enhancePromptWithRAG(
+              message,
+              this.agentPrompts.concierge,
+              this.agentPrompts.conciergeWithRag
+            );
+            promptToUse = conciergeRagResult.promptToUse;
+            ragReferences = conciergeRagResult.ragReferences;
+            ragSearchMade = conciergeRagResult.ragSearchMade;
             break;
+
           case 'research':
             currentAgentRole = 'researcher';
-
-            // If RAG is available and the topic is set, use it to enhance research
-            if (this.isRagInitialized && workflowState.topic) {
-              try {
-                ragSearchMade = true; // Mark that a search was attempted
-                const results = await ragService.search(workflowState.topic, 3);
-
-                if (results.length > 0) {
-                  relevantDocuments = results.map(doc => doc.content).join('\n\n');
-
-                  // Extract document metadata for display
-                  results.forEach(doc => {
-                    try {
-                      const metadataStr = doc.content.split('\n')[0]; // Assuming first line has metadata
-                      const documentName = metadataStr.includes(':') ?
-                        metadataStr.split(':')[1].trim() : 'Unknown';
-
-                      // Extract a unique ID from the content or use a hash
-                      const rowIdMatch = doc.content.match(/Row ID: (\d+)/i);
-                      const rowId = rowIdMatch ? rowIdMatch[1] :
-                        `doc-${Math.random().toString(36).substring(2, 10)}`;
-
-                      ragReferences.push({
-                        documentName,
-                        rowId,
-                        similarity: doc.similarity,
-                      });
-                    } catch (err) {
-                      console.error('Error processing RAG document metadata:', err);
-                    }
-                  });
-
-                  promptToUse = this.agentPrompts.researcherWithRag +
-                    `\nThe topic to research is: ${workflowState.topic}\n\n` +
-                    `Relevant documents:\n${relevantDocuments}`;
-                } else {
-                  promptToUse = this.agentPrompts.researcher +
-                    `\nThe topic to research is: ${workflowState.topic}`;
-                }
-              } catch (error) {
-                console.error('Error using RAG for research:', error);
-                promptToUse = this.agentPrompts.researcher +
-                  `\nThe topic to research is: ${workflowState.topic}`;
-              }
+            // Use RAG to enhance research with relevant documents
+            if (workflowState.topic) {
+              const researchRagResult = await this.enhancePromptWithRAG(
+                workflowState.topic,
+                this.agentPrompts.researcher + `\nThe topic to research is: ${workflowState.topic}`,
+                this.agentPrompts.researcherWithRag + `\nThe topic to research is: ${workflowState.topic}`
+              );
+              promptToUse = researchRagResult.promptToUse;
+              ragReferences = researchRagResult.ragReferences;
+              ragSearchMade = researchRagResult.ragSearchMade;
             } else {
-              promptToUse = this.agentPrompts.researcher +
-                `\nThe topic to research is: ${workflowState.topic}`;
+              promptToUse = this.agentPrompts.researcher;
             }
             break;
+
           case 'writing':
             currentAgentRole = 'copywriter';
             promptToUse = this.agentPrompts.copywriter + `\nHere are the research notes to use:\n${workflowState.researchNotes}`;
             break;
+
           case 'review':
             currentAgentRole = 'reviewer';
-            promptToUse = this.agentPrompts.reviewer + `\nHere is the draft to review:\n${workflowState.draft}`;
+            // Use RAG to help with fact-checking during review
+            if (workflowState.draft) {
+              const reviewRagResult = await this.enhancePromptWithRAG(
+                workflowState.draft,
+                this.agentPrompts.reviewer + `\nHere is the draft to review:\n${workflowState.draft}`,
+                this.agentPrompts.reviewerWithRag + `\nHere is the draft to review:\n${workflowState.draft}`
+              );
+              promptToUse = reviewRagResult.promptToUse;
+              ragReferences = reviewRagResult.ragReferences;
+              ragSearchMade = reviewRagResult.ragSearchMade;
+            } else {
+              promptToUse = this.agentPrompts.reviewer;
+            }
             break;
         }
       }
