@@ -1,0 +1,1 @@
+/Users/chris.lloyd-jones/Downloads/drop_build_osx/Foundry.Local.Client/release_osx-arm64/foundry "$@"
