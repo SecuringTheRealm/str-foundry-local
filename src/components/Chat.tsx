@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Message, Agent, WorkflowState } from "@/types/chat";
+import { Message, Agent, WorkflowState, RAGReference } from "@/types/chat";
 import MessageItem from "./MessageItem";
 import ChatInput from "./ChatInput";
 import AgentWorkflow from "./AgentWorkflow";
@@ -309,6 +309,25 @@ export default function Chat() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
+      // Extract RAG metadata from headers
+      const ragReferencesHeader = response.headers.get("X-Rag-References");
+      const ragSearchMadeHeader = response.headers.get("X-Rag-Search-Made");
+
+      let ragReferences: RAGReference[] | undefined;
+      let ragSearchMade = false;
+
+      if (ragReferencesHeader && ragReferencesHeader.trim() !== "") {
+        try {
+          ragReferences = JSON.parse(ragReferencesHeader);
+        } catch (e) {
+          console.error("Error parsing RAG references header:", e);
+        }
+      }
+
+      if (ragSearchMadeHeader === "true") {
+        ragSearchMade = true;
+      }
+
       // Get a reader from the response body
       const reader = response.body?.getReader();
       if (!reader) {
@@ -433,6 +452,8 @@ export default function Chat() {
         // Only include thought process if we actually detected think tokens
         thoughtProcess: hasDetectedThinkTokens ? finalThought.trim() : "",
         isThinking: false,
+        ragReferences,
+        ragSearchMade,
       };
 
       // Add the final message to the messages array

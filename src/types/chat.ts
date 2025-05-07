@@ -15,6 +15,7 @@ export interface Message {
   thoughtProcess?: string; // Store the thought process content (<think>...</think>)
   isThinking?: boolean; // Flag to indicate if currently in thinking mode
   ragReferences?: RAGReference[]; // Store RAG document references if used
+  ragSearchMade?: boolean; // Flag to indicate a RAG search was attempted, even if no results
 }
 
 export interface Agent {

@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
     if (useStream) {
       // Process the message using our agent service with streaming
-      const stream = await agentService.streamMessage({
+      const { stream, ragReferences, ragSearchMade } = await agentService.streamMessage({
         message,
         systemPrompt,
         history,
@@ -29,17 +29,19 @@ export async function POST(request: NextRequest) {
         workflowState,
       });
 
-      // Return the stream directly
+      // Return the stream directly with metadata headers
       return new Response(stream, {
         headers: {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           'Connection': 'keep-alive',
+          'X-Rag-References': ragReferences ? JSON.stringify(ragReferences) : '',
+          'X-Rag-Search-Made': ragSearchMade ? 'true' : 'false',
         },
       });
     } else {
       // Process the message using our agent service normally
-      const reply = await agentService.processMessage({
+      const { content: reply, ragReferences, ragSearchMade } = await agentService.processMessage({
         message,
         systemPrompt,
         history,
@@ -121,7 +123,9 @@ export async function POST(request: NextRequest) {
         JSON.stringify({
           reply,
           updatedState,
-          autoAdvance: advanceResult
+          autoAdvance: advanceResult,
+          ragReferences,
+          ragSearchMade
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
       );

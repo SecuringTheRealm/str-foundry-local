@@ -1,5 +1,5 @@
 import { OpenAI } from 'openai';
-import { Message, WorkflowState, Role } from '@/types/chat';
+import { Message, WorkflowState, Role, RAGReference } from '@/types/chat';
 import ragService from './ragService';
 
 // Initialize Azure OpenAI client with the API key and endpoint from environment variables
@@ -79,7 +79,11 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
   /**
    * Processes a user message and generates a response based on the current workflow state
    */
-  async processMessage(request: ChatRequest): Promise<string> {
+  async processMessage(request: ChatRequest): Promise<{
+    content: string;
+    ragReferences?: RAGReference[];
+    ragSearchMade?: boolean;
+  }> {
     const { message, systemPrompt, history, agentId, workflowState } = request;
 
     try {
@@ -87,6 +91,8 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
       let currentAgentRole: Role = 'agent';
       let promptToUse = systemPrompt || 'You are a helpful AI assistant.';
       let relevantDocuments: string = '';
+      let ragReferences: RAGReference[] = [];
+      let ragSearchMade = false;
 
       if (workflowState) {
         switch (workflowState.stage) {
@@ -100,10 +106,34 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
             // If RAG is available and the topic is set, use it to enhance research
             if (this.isRagInitialized && workflowState.topic) {
               try {
+                ragSearchMade = true; // Mark that a search was attempted
                 const results = await ragService.search(workflowState.topic, 3);
 
                 if (results.length > 0) {
                   relevantDocuments = results.map(doc => doc.content).join('\n\n');
+
+                  // Extract document metadata for display
+                  results.forEach(doc => {
+                    try {
+                      const metadataStr = doc.content.split('\n')[0]; // Assuming first line has metadata
+                      const documentName = metadataStr.includes(':') ?
+                        metadataStr.split(':')[1].trim() : 'Unknown';
+
+                      // Extract a unique ID from the content or use a hash
+                      const rowIdMatch = doc.content.match(/Row ID: (\d+)/i);
+                      const rowId = rowIdMatch ? rowIdMatch[1] :
+                        `doc-${Math.random().toString(36).substring(2, 10)}`;
+
+                      ragReferences.push({
+                        documentName,
+                        rowId,
+                        similarity: doc.similarity,
+                      });
+                    } catch (err) {
+                      console.error('Error processing RAG document metadata:', err);
+                    }
+                  });
+
                   promptToUse = this.agentPrompts.researcherWithRag +
                     `\nThe topic to research is: ${workflowState.topic}\n\n` +
                     `Relevant documents:\n${relevantDocuments}`;
@@ -157,17 +187,29 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
       // Extract the response from the completion
       console.log('model:', process.env.FOUNDRY_LOCAL_MODEL || 'Phi-4-mini-cpu-int4-rtn-block-32-acc-level-4-onnx');
 
-      return completion.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+      const responseContent = completion.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+
+      return {
+        content: responseContent,
+        ragReferences: ragReferences.length > 0 ? ragReferences : undefined,
+        ragSearchMade: ragSearchMade,
+      };
     } catch (error: any) {
       console.error('Error processing message:', error);
-      return `Error: ${error.message || 'An unknown error occurred'}`;
+      return {
+        content: `Error: ${error.message || 'An unknown error occurred'}`,
+      };
     }
   }
 
   /**
    * Processes a user message and returns a stream for real-time UI updates
    */
-  async streamMessage(request: ChatRequest): Promise<ReadableStream<Uint8Array>> {
+  async streamMessage(request: ChatRequest): Promise<{
+    stream: ReadableStream<Uint8Array>;
+    ragReferences?: RAGReference[];
+    ragSearchMade?: boolean;
+  }> {
     const { message, systemPrompt, history, agentId, workflowState } = request;
 
     // Create a transform stream to process the OpenAI stream
@@ -183,6 +225,8 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
       let currentAgentRole: Role = 'agent';
       let promptToUse = systemPrompt || 'You are a helpful AI assistant.';
       let relevantDocuments: string = '';
+      let ragReferences: RAGReference[] = [];
+      let ragSearchMade = false;
 
       if (workflowState) {
         switch (workflowState.stage) {
@@ -196,10 +240,34 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
             // If RAG is available and the topic is set, use it to enhance research
             if (this.isRagInitialized && workflowState.topic) {
               try {
+                ragSearchMade = true; // Mark that a search was attempted
                 const results = await ragService.search(workflowState.topic, 3);
 
                 if (results.length > 0) {
                   relevantDocuments = results.map(doc => doc.content).join('\n\n');
+
+                  // Extract document metadata for display
+                  results.forEach(doc => {
+                    try {
+                      const metadataStr = doc.content.split('\n')[0]; // Assuming first line has metadata
+                      const documentName = metadataStr.includes(':') ?
+                        metadataStr.split(':')[1].trim() : 'Unknown';
+
+                      // Extract a unique ID from the content or use a hash
+                      const rowIdMatch = doc.content.match(/Row ID: (\d+)/i);
+                      const rowId = rowIdMatch ? rowIdMatch[1] :
+                        `doc-${Math.random().toString(36).substring(2, 10)}`;
+
+                      ragReferences.push({
+                        documentName,
+                        rowId,
+                        similarity: doc.similarity,
+                      });
+                    } catch (err) {
+                      console.error('Error processing RAG document metadata:', err);
+                    }
+                  });
+
                   promptToUse = this.agentPrompts.researcherWithRag +
                     `\nThe topic to research is: ${workflowState.topic}\n\n` +
                     `Relevant documents:\n${relevantDocuments}`;
@@ -277,13 +345,19 @@ Be thorough but respectful, acknowledging the strengths of the work while propos
         }
       })();
 
-      return stream.readable;
+      return {
+        stream: stream.readable,
+        ragReferences: ragReferences.length > 0 ? ragReferences : undefined,
+        ragSearchMade: ragSearchMade,
+      };
     } catch (error: any) {
       console.error('Error setting up stream:', error);
       const errorMessage = `Error: ${error.message || 'An unknown error occurred'}`;
       await writer.write(encoder.encode(errorMessage));
       await writer.close();
-      return stream.readable;
+      return {
+        stream: stream.readable
+      };
     }
   }
 

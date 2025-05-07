@@ -16,6 +16,7 @@ const MessageItem = ({ message }: MessageItemProps) => {
     thoughtProcess,
     isThinking,
     ragReferences,
+    ragSearchMade,
   } = message;
   // Initial state will be expanded when thinking, but collapsed when complete
   const [isThoughtExpanded, setIsThoughtExpanded] = useState(isThinking);
@@ -75,6 +76,8 @@ const MessageItem = ({ message }: MessageItemProps) => {
   };
 
   const hasRagReferences = ragReferences && ragReferences.length > 0;
+  const emptyRagSearch =
+    ragSearchMade && (!ragReferences || ragReferences.length === 0);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
@@ -101,7 +104,7 @@ const MessageItem = ({ message }: MessageItemProps) => {
             </div>
             <div className="text-xs text-[#666666]">{time}</div>
 
-            {/* RAG info icon */}
+            {/* RAG info icon - matched documents */}
             {hasRagReferences && (
               <div className="ml-auto relative group">
                 <div className="w-5 h-5 rounded-full bg-[#FFB314] bg-opacity-20 flex items-center justify-center text-[#FF5800] cursor-help">
@@ -125,6 +128,21 @@ const MessageItem = ({ message }: MessageItemProps) => {
                         </li>
                       ))}
                     </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Empty RAG search indicator */}
+            {emptyRagSearch && (
+              <div className="ml-auto relative group">
+                <div className="w-5 h-5 rounded-full bg-[#E5E5E5] flex items-center justify-center text-[#666666] cursor-help">
+                  <span className="text-xs font-bold">?</span>
+                  <div className="absolute z-10 right-0 mt-1 w-max max-w-[200px] bg-white border border-[#E5E5E5] rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2 text-xs text-[#666666]">
+                    <p className="font-medium text-[#666666] mb-1">
+                      RAG Search Info:
+                    </p>
+                    <p>Search was made but no matching documents were found.</p>
                   </div>
                 </div>
               </div>
