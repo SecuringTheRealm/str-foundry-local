@@ -6,6 +6,8 @@ import sqlite3 from 'sqlite3';
 import { pipeline } from '@xenova/transformers';
 import cosineSimilarity from 'compute-cosine-similarity';
 
+// We don't need StringDecoder since we're using the built-in normalize method
+
 interface CSVRow {
     [key: string]: string;
 }
@@ -46,7 +48,7 @@ type DBRow = Record<string, string | number | boolean | null>;
 // Type for the embedding model from transformers.js
 interface EmbeddingModel {
     (text: string, options?: {
-        pooling?: 'mean' | 'cls' | 'max';
+        pooling?: 'mean' | 'cls' | 'none';  // Changed from 'max' to 'none' to match library types
         normalize?: boolean;
     }): Promise<{ data: number[] }>;
 }
@@ -161,7 +163,8 @@ export class RAGService {
 
             // Initialize the embedding model
             try {
-                this._embeddingModel = await pipeline('feature-extraction', this._embeddingModelName);
+                // Cast the pipeline result to match our interface
+                this._embeddingModel = await pipeline('feature-extraction', this._embeddingModelName) as unknown as EmbeddingModel;
                 console.log("Embedding model loaded successfully");
             } catch (error) {
                 console.error("Error loading embedding model:", error);
@@ -187,7 +190,7 @@ export class RAGService {
 
                 // Check if embedding column exists (may be missing in existing databases)
                 const tableInfo = await this._all("PRAGMA table_info(documents)");
-                const hasEmbeddingColumn = tableInfo.some((col: any) =>
+                const hasEmbeddingColumn = tableInfo.some((col: DBRow) =>
                     col.name === 'embedding'
                 );
 
@@ -274,9 +277,23 @@ export class RAGService {
         return new Promise((resolve, reject) => {
             const rows: CSVRow[] = [];
 
-            fs.createReadStream(filePath)
-                .pipe(csvParser())
-                .on('data', (data: CSVRow) => rows.push(data))
+            fs.createReadStream(filePath, { encoding: 'utf8' })
+                .pipe(csvParser({
+                    // Add CSV parser options to handle Unicode properly
+                    skipLines: 0,
+                    strict: true,
+                    escape: '"',
+                }))
+                .on('data', (data: CSVRow) => {
+                    // Normalize all string values in the row
+                    const normalizedData: CSVRow = {};
+                    for (const [key, value] of Object.entries(data)) {
+                        normalizedData[key] = typeof value === 'string'
+                            ? this.normalizeUnicode(value)
+                            : value;
+                    }
+                    rows.push(normalizedData);
+                })
                 .on('end', async () => {
                     try {
                         // Process the rows and create document chunks
@@ -312,10 +329,37 @@ export class RAGService {
     }
 
     /**
+     * Normalize Unicode characters to ensure consistent handling
+     */
+    private normalizeUnicode(text: string): string {
+        if (!text) return '';
+
+        try {
+            // Normalize to NFC form (Normalization Form Canonical Composition)
+            // This ensures characters are decomposed and then recomposed to their canonical form
+            const normalized = text.normalize('NFC');
+
+            // Remove any invisible control characters and unused code points
+            return normalized.replace(/[\u0000-\u001F\u007F-\u009F\uFEFF\uFFF0-\uFFFF]/g, '');
+        } catch (error) {
+            console.warn('Error normalizing text:', error);
+            // If normalization fails, return original with basic cleanup
+            return text.replace(/[\u0000-\u001F\u007F]/g, '');
+        }
+    }
+
+    /**
      * Format a CSV row into a readable text content
      */
     private formatRowContent(row: CSVRow): string {
-        const lines = Object.entries(row).map(([key, value]) => `${key}: ${value}`);
+        const lines = Object.entries(row).map(([key, value]) => {
+            // Ensure value is properly normalized before joining
+            const normalizedValue = typeof value === 'string'
+                ? this.normalizeUnicode(value)
+                : String(value);
+
+            return `${key}: ${normalizedValue}`;
+        });
         return lines.join('\n');
     }
 
@@ -374,9 +418,12 @@ export class RAGService {
         }
 
         try {
-            // Get embeddings from transformers.js
-            const result = await this._embeddingModel(text, {
-                pooling: 'mean',
+            // Normalize text before sending to embedding model
+            const normalizedText = this.normalizeUnicode(text);
+
+            // Get embeddings from transformers.js - using correct pooling options
+            const result = await this._embeddingModel(normalizedText, {
+                pooling: 'mean',  // Using 'mean' which is compatible
                 normalize: true
             });
 
@@ -406,22 +453,42 @@ export class RAGService {
             // For large datasets, this would be inefficient but works for smaller ones
             const allDocs = await this._all('SELECT id, content, metadata, embedding FROM documents');
 
-            // Calculate similarities and sort
+            // Calculate similarities and create DocWithSimilarity objects
             const similarities: DocWithSimilarity[] = allDocs.map(doc => {
                 const embedding = JSON.parse(doc.embedding as string);
                 // Ensure similarity is always a number (fallback to 0 if null)
                 const similarity = cosineSimilarity(queryArray, embedding) || 0;
 
+                // Parse metadata to check source
+                const metadata = doc.metadata as string;
+
                 return {
                     id: doc.id as string,
                     content: doc.content as string,
-                    metadata: doc.metadata as string,
+                    metadata,
                     similarity
                 };
             });
 
+            // Prioritize results from definitions.csv by boosting their similarity score
+            const boostedSimilarities = similarities.map(doc => {
+                try {
+                    const metadataObj = JSON.parse(doc.metadata);
+                    // Check if this result is from definitions.csv
+                    if (metadataObj?.source === 'definitions.csv') {
+                        // Boost the similarity score by 20% (but cap at 1.0)
+                        const boostedScore = Math.min(doc.similarity * 1.2, 1.0);
+                        return { ...doc, similarity: boostedScore };
+                    }
+                } catch (error) {
+                    console.warn('Error parsing metadata:', error);
+                }
+                // Return original if not from definitions.csv or if parsing failed
+                return doc;
+            });
+
             // Sort by similarity (highest first) and take top 'limit' results
-            const topResults = similarities
+            const topResults = boostedSimilarities
                 .sort((a, b) => b.similarity - a.similarity)
                 .slice(0, limit);
 
@@ -449,7 +516,10 @@ export class RAGService {
             // Increment search counter
             this._searchCount++;
 
-            const results = await this.vectorSearch(query, limit);
+            // Normalize query before searching
+            const normalizedQuery = this.normalizeUnicode(query);
+
+            const results = await this.vectorSearch(normalizedQuery, limit);
 
             // Increment match counter if we found results
             if (results.length > 0) {

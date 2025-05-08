@@ -8,7 +8,11 @@ export default function Home() {
         <footer className="mt-8 text-center text-[#666666] text-sm border-t border-[#E5E5E5]">
           <p>
             Please note that this content is AI generated and may not be 100%
-            accurate.
+            accurate. See similar examples at{" "}
+            <a href="https://securingtherealm.github.io">
+              securingtherealm.github.io
+            </a>
+            .
           </p>
         </footer>
       </div>
