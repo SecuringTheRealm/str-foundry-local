@@ -22,7 +22,7 @@ const AgentWorkflow = ({
   }>({
     files: [],
     lastIngestTime: null,
-    stats: { totalSearches: 0, totalMatches: 0 },
+    stats: { totalSearches: 0, totalMatches: 0, embeddingFailures: 0 },
   });
 
   useEffect(() => {
@@ -40,7 +40,11 @@ const AgentWorkflow = ({
           const lastIngestTime = data.lastIngestTime
             ? new Date(data.lastIngestTime)
             : null;
-          const stats = data.stats || { totalSearches: 0, totalMatches: 0 };
+          const stats = data.stats || {
+            totalSearches: 0,
+            totalMatches: 0,
+            embeddingFailures: 0,
+          };
           setFileInfo({ files, lastIngestTime, stats });
         }
       } catch (error) {

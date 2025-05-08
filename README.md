@@ -1,5 +1,5 @@
 # Foundry Local
-> A web application for running local SLMs (small language models) using Neutron Server and Foundry Client.
+> A web application for running local SLMs (small language models) using Neutron Server and Foundry Client with local vector search capabilities.
 
 <!-- Javascript -->
 [![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
@@ -16,9 +16,19 @@
 Foundry Local provides a seamless interface for local LLM inference. It combines:
 - **Neutron Server** (Inference.Service.Agent) for model processing
 - **Foundry Client** for handling requests
+- **Local vector search** using sqlite-vec and transformers.js for embeddings
 - A **Next.js frontend** for a user-friendly interaction experience
 
 With Foundry Local, you can run powerful language models directly on your machine without requiring cloud services, providing privacy, lower latency, and no usage costs.
+
+## Knowledge Features
+
+The application includes a RAG (Retrieval-Augmented Generation) system that:
+- Automatically indexes CSV files placed in the `/data` folder
+- Generates embeddings locally using transformers.js (no OpenAI API needed)
+- Stores vectors efficiently in SQLite using sqlite-vec extension
+- Only re-indexes files that have been added or changed
+- Falls back to text search if embedding generation fails
 
 ## Configuration
 

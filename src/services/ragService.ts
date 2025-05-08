@@ -1,10 +1,10 @@
-import { OpenAI } from 'openai';
 import fs from 'fs';
 import path from 'path';
-import Database from 'better-sqlite3';
 import csvParser from 'csv-parser';
 import { createHash } from 'crypto';
-import computeCosineSimilarity from 'compute-cosine-similarity';
+import sqlite3 from 'sqlite3';
+import { pipeline } from '@xenova/transformers';
+import cosineSimilarity from 'compute-cosine-similarity';
 
 interface CSVRow {
     [key: string]: string;
@@ -14,7 +14,14 @@ interface DocumentChunk {
     id: string;
     content: string;
     metadata: string;
-    embedding?: number[];
+}
+
+// Document with similarity score used in vector search
+interface DocWithSimilarity {
+    id: string;
+    content: string;
+    metadata: string;
+    similarity: number;
 }
 
 export interface IngestedFileInfo {
@@ -31,93 +38,184 @@ export interface RAGStats {
 export interface RAGSearchResult {
     content: string;
     similarity: number;
-    sourceType: 'vector' | 'text';
+    sourceType: 'vector' | 'text'; // Add the source type property to match what AgentService expects
+}
+
+type DBRow = Record<string, string | number | boolean | null>;
+
+// Type for the embedding model from transformers.js
+interface EmbeddingModel {
+    (text: string, options?: {
+        pooling?: 'mean' | 'cls' | 'max';
+        normalize?: boolean;
+    }): Promise<{ data: number[] }>;
 }
 
 export class RAGService {
-    private db: Database.Database | null = null;
-    private dbPath: string = path.join(process.cwd(), 'rag.db');
-    private dataDir: string = path.join(process.cwd(), 'data');
-    private openai: OpenAI;
-    private isInitialized: boolean = false;
-    private hasContent: boolean = false;
-    private ingestedFiles: IngestedFileInfo[] = [];
-    private lastIngestTime: Date | null = null;
-    private searchCount: number = 0;
-    private matchCount: number = 0;
-    private embeddingFailureCount: number = 0;
-    private useFullTextSearch: boolean = false;
+    private _db: sqlite3.Database | null = null;
+    private _dataDir: string = path.join(process.cwd(), 'data');
+    private _dbPath: string = path.join(process.cwd(), 'rag.db');
+    private _isInitialized: boolean = false;
+    private _hasContent: boolean = false;
+    private _ingestedFiles: IngestedFileInfo[] = [];
+    private _lastIngestTime: Date | null = null;
+    private _searchCount: number = 0;
+    private _matchCount: number = 0;
+    private _embeddingFailureCount: number = 0;
+    private _embeddingModel: EmbeddingModel | null = null; // Using any as the transformers.js types are complex
+    private readonly _embeddingModelName: string = 'Xenova/all-MiniLM-L6-v2';
+    private readonly _embeddingDimension: number = 384; // Dimension for the all-MiniLM-L6-v2 model
+    private readonly _documentStore: Map<string, { content: string, metadata: string }> = new Map();
 
-    constructor() {
-        this.openai = new OpenAI({
-            apiKey: 'not-needed-for-local',
-            baseURL: 'http://localhost:5272/v1',
+    /**
+     * Initializes the database and runs a query
+     */
+    private async _runQuery(query: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            if (!this._db) {
+                reject(new Error('Database not initialized'));
+                return;
+            }
+            this._db.run(query, (err) => {
+                if (err) reject(err);
+                else resolve();
+            });
         });
     }
 
     /**
-     * Initialize the RAG service by setting up the database and ingesting data
+     * Runs a parameterized query and returns results
+     */
+    private async _all(query: string, params: (string | number | null)[] = []): Promise<DBRow[]> {
+        return new Promise((resolve, reject) => {
+            if (!this._db) {
+                reject(new Error('Database not initialized'));
+                return;
+            }
+            this._db.all(query, params, (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows as DBRow[]);
+            });
+        });
+    }
+
+    /**
+     * Runs a parameterized statement (insert, update, delete)
+     */
+    private async _run(query: string, params: (string | number | null)[] = []): Promise<void> {
+        return new Promise((resolve, reject) => {
+            if (!this._db) {
+                reject(new Error('Database not initialized'));
+                return;
+            }
+            this._db.run(query, params, function (err) {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+    }
+
+    /**
+     * Initialize the RAG service by setting up the SQLite database and ingesting data
      */
     public async initialize(): Promise<boolean> {
         try {
             // Check if data directory exists and has files
-            if (!fs.existsSync(this.dataDir)) {
+            if (!fs.existsSync(this._dataDir)) {
                 console.log('Data directory does not exist');
                 return false;
             }
 
-            const files = fs.readdirSync(this.dataDir).filter(file => file.endsWith('.csv'));
+            const files = fs.readdirSync(this._dataDir).filter(file => file.endsWith('.csv'));
             if (files.length === 0) {
                 console.log('No CSV files found in data directory');
                 return false;
             }
 
-            // Check if database already exists and if it's up-to-date
-            const dbExists = fs.existsSync(this.dbPath);
-            let regenerateDb = !dbExists;
+            // Check if we need to regenerate the vector store
+            let regenerateStore = false;
 
-            if (dbExists) {
-                // Check if any CSV files are newer than the database file
-                const dbStats = fs.statSync(this.dbPath);
-                for (const file of files) {
-                    const filePath = path.join(this.dataDir, file);
-                    const fileStats = fs.statSync(filePath);
-                    if (fileStats.mtime > dbStats.mtime) {
-                        console.log(`CSV file ${file} has been updated, regenerating database`);
-                        regenerateDb = true;
-                        break;
+            if (!fs.existsSync(this._dbPath)) {
+                regenerateStore = true;
+            } else {
+                try {
+                    // Check if any CSV files are newer than the database
+                    const dbStats = fs.statSync(this._dbPath);
+                    for (const file of files) {
+                        const filePath = path.join(this._dataDir, file);
+                        const fileStats = fs.statSync(filePath);
+                        if (fileStats.mtime > dbStats.mtime) {
+                            console.log(`CSV file ${file} has been updated, regenerating vector store`);
+                            regenerateStore = true;
+                            break;
+                        }
                     }
+                } catch (error) {
+                    console.error('Error checking file stats:', error);
+                    regenerateStore = true;
                 }
             }
 
-            // Set up the database
-            this.db = new Database(this.dbPath);
+            // Initialize SQLite database
+            this._db = new sqlite3.Database(this._dbPath);
 
-            // Create tables if they don't exist or if regenerating
-            if (regenerateDb) {
-                this.setupDatabase();
+            // Initialize the embedding model
+            try {
+                this._embeddingModel = await pipeline('feature-extraction', this._embeddingModelName);
+                console.log("Embedding model loaded successfully");
+            } catch (error) {
+                console.error("Error loading embedding model:", error);
+                return false;
+            }
 
+            // Create database schema if it doesn't exist
+            await this._runQuery(`
+                CREATE TABLE IF NOT EXISTS documents (
+                    id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    metadata TEXT NOT NULL,
+                    embedding TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_documents_id ON documents(id);
+            `);
+
+            // Create or load the vector store
+            if (regenerateStore) {
                 // Clear previous ingestion records
-                this.ingestedFiles = [];
+                this._ingestedFiles = [];
+                this._documentStore.clear();
+
+                // Remove existing database records
+                await this._runQuery('DELETE FROM documents');
 
                 // Ingest all CSV files
                 for (const file of files) {
-                    const filePath = path.join(this.dataDir, file);
+                    const filePath = path.join(this._dataDir, file);
                     await this.ingestCSV(filePath);
 
                     // Record ingestion time and file
                     const ingestTime = new Date();
-                    this.ingestedFiles.push({
+                    this._ingestedFiles.push({
                         fileName: file,
                         ingestTime
                     });
-                    this.lastIngestTime = ingestTime;
+                    this._lastIngestTime = ingestTime;
                 }
             } else {
-                // If we didn't regenerate, still populate the ingested files info
-                // based on the files in the data directory
-                this.ingestedFiles = files.map(file => {
-                    const filePath = path.join(this.dataDir, file);
+                // Just load existing documents from the database
+                const documents = await this._all('SELECT id, content, metadata FROM documents');
+
+                for (const doc of documents) {
+                    this._documentStore.set(doc.id as string, {
+                        content: doc.content as string,
+                        metadata: doc.metadata as string
+                    });
+                }
+
+                // Populate the ingested files info based on the files in the data directory
+                this._ingestedFiles = files.map(file => {
+                    const filePath = path.join(this._dataDir, file);
                     const fileStats = fs.statSync(filePath);
                     return {
                         fileName: file,
@@ -125,32 +223,19 @@ export class RAGService {
                     };
                 });
 
-                if (this.ingestedFiles.length > 0) {
+                if (this._ingestedFiles.length > 0) {
                     // Set the last ingest time to the most recent file modification
-                    this.lastIngestTime = new Date(Math.max(
-                        ...this.ingestedFiles.map(file => file.ingestTime.getTime())
+                    this._lastIngestTime = new Date(Math.max(
+                        ...this._ingestedFiles.map(file => file.ingestTime.getTime())
                     ));
                 }
             }
 
-            // Check if we have content in the database
-            const count = this.db.prepare('SELECT COUNT(*) as count FROM documents').get() as { count: number };
-            this.hasContent = count.count > 0;
+            // Check if we have content
+            this._hasContent = this._documentStore.size > 0;
+            this._isInitialized = true;
 
-            // Test embedding API availability
-            try {
-                await this.getEmbedding("test embedding availability");
-                this.useFullTextSearch = false;
-                console.log("Embedding API is available, using vector search");
-            } catch (error) {
-                console.log("Embedding API unavailable, will use text search as fallback");
-                this.useFullTextSearch = true;
-                // Try to set up FTS if not already done
-                this.setupFullTextSearch();
-            }
-
-            this.isInitialized = true;
-            return this.hasContent;
+            return this._hasContent;
         } catch (error) {
             console.error('Error initializing RAG service:', error);
             return false;
@@ -158,122 +243,9 @@ export class RAGService {
     }
 
     /**
-     * Set up the SQLite database schema
-     */
-    private setupDatabase(): void {
-        if (!this.db) return;
-
-        // Drop tables if they exist for regeneration
-        this.db.prepare('DROP TABLE IF EXISTS documents').run();
-        this.db.prepare('DROP TABLE IF EXISTS embeddings').run();
-        this.db.prepare('DROP TABLE IF EXISTS documents_fts').run();
-
-        // Create documents table
-        this.db.prepare(`
-      CREATE TABLE documents (
-        id TEXT PRIMARY KEY,
-        content TEXT NOT NULL,
-        metadata TEXT
-      )
-    `).run();
-
-        // Create embeddings table
-        this.db.prepare(`
-      CREATE TABLE embeddings (
-        id TEXT PRIMARY KEY,
-        document_id TEXT NOT NULL,
-        embedding TEXT NOT NULL,
-        FOREIGN KEY (document_id) REFERENCES documents(id)
-      )
-    `).run();
-
-        // Set up full-text search as well
-        this.setupFullTextSearch();
-    }
-
-    /**
-     * Set up full-text search capability
-     */
-    private setupFullTextSearch(): void {
-        if (!this.db) return;
-
-        try {
-            // Drop existing FTS table if it exists
-            this.db.prepare('DROP TABLE IF EXISTS documents_fts').run();
-
-            // Create FTS virtual table for text search
-            this.db.prepare(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
-          id,
-          content,
-          content='documents',
-          content_rowid='rowid'
-        )
-      `).run();
-
-            // Create triggers to keep FTS table in sync with documents
-            this.db.prepare(`
-        CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents
-        BEGIN
-          INSERT INTO documents_fts(id, content) VALUES (new.id, new.content);
-        END
-      `).run();
-
-            this.db.prepare(`
-        CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents
-        BEGIN
-          INSERT INTO documents_fts(documents_fts, id, content) VALUES('delete', old.id, old.content);
-        END
-      `).run();
-
-            this.db.prepare(`
-        CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents
-        BEGIN
-          INSERT INTO documents_fts(documents_fts, id, content) VALUES('delete', old.id, old.content);
-          INSERT INTO documents_fts(id, content) VALUES (new.id, new.content);
-        END
-      `).run();
-
-            // Populate the FTS table with existing documents
-            this.rebuildFtsTable();
-        } catch (error) {
-            console.error('Error setting up full-text search, falling back to LIKE queries:', error);
-        }
-    }
-
-    /**
-     * Rebuild the FTS table from the documents table to fix corruption
-     */
-    private rebuildFtsTable(): void {
-        if (!this.db) return;
-
-        try {
-            // Get count of documents
-            const count = this.db.prepare('SELECT COUNT(*) as count FROM documents').get() as { count: number };
-
-            if (count.count > 0) {
-                // Clear existing FTS content
-                this.db.prepare('DELETE FROM documents_fts').run();
-
-                // Repopulate from documents table
-                this.db.prepare(`
-          INSERT INTO documents_fts(id, content)
-          SELECT id, content FROM documents
-        `).run();
-
-                console.log(`Rebuilt FTS table with ${count.count} documents`);
-            }
-        } catch (error) {
-            console.error('Error rebuilding FTS table:', error);
-        }
-    }
-
-    /**
-     * Ingest a CSV file into the database
+     * Ingest a CSV file into the vector store
      */
     private async ingestCSV(filePath: string): Promise<void> {
-        if (!this.db) return;
-
         const fileName = path.basename(filePath);
         console.log(`Ingesting CSV file: ${fileName}`);
 
@@ -298,13 +270,14 @@ export class RAGService {
                             // Create a unique ID for the document
                             const id = this.createDocumentId(fileName, i, content);
 
-                            // Store the document
+                            // Store the document with its embedding
                             await this.storeDocument({
                                 id,
                                 content,
                                 metadata
                             });
                         }
+
                         resolve();
                     } catch (error) {
                         reject(error);
@@ -333,32 +306,37 @@ export class RAGService {
     }
 
     /**
-     * Store a document in the database and generate its embedding
+     * Store a document in the document store and add its embedding to SQLite
      */
     private async storeDocument(document: DocumentChunk): Promise<void> {
-        if (!this.db) return;
+        if (!this._db || !this._embeddingModel) return;
 
         try {
-            // Store the document
-            this.db.prepare(`
-        INSERT OR REPLACE INTO documents (id, content, metadata)
-        VALUES (?, ?, ?)
-      `).run(document.id, document.content, document.metadata);
+            // Store document content and metadata
+            this._documentStore.set(document.id, {
+                content: document.content,
+                metadata: document.metadata
+            });
 
-            // Try to generate and store embedding
+            // Generate and store embedding
             try {
-                if (!this.useFullTextSearch) {
-                    const embedding = await this.getEmbedding(document.content);
-                    this.db.prepare(`
-            INSERT OR REPLACE INTO embeddings (id, document_id, embedding)
-            VALUES (?, ?, ?)
-          `).run(document.id, document.id, JSON.stringify(embedding));
-                }
-            } catch (error) {
-                console.warn('Error storing embedding, document will use text search only:', error);
-                this.embeddingFailureCount++;
-            }
+                // Generate embedding using transformers.js
+                const embedding = await this.getEmbedding(document.content);
 
+                // Store as JSON string in SQLite
+                const embeddingJson = JSON.stringify(Array.from(embedding));
+
+                // Insert into SQLite using parameterized query
+                await this._run(
+                    'INSERT OR REPLACE INTO documents (id, content, metadata, embedding) VALUES (?, ?, ?, ?)',
+                    [document.id, document.content, document.metadata, embeddingJson]
+                );
+
+            } catch (error) {
+                console.error('Error storing embedding:', error);
+                this._embeddingFailureCount++;
+                throw error;
+            }
         } catch (error) {
             console.error('Error storing document:', error);
             throw error;
@@ -368,195 +346,95 @@ export class RAGService {
     /**
      * Get an embedding for the given text
      */
-    private async getEmbedding(text: string): Promise<number[]> {
+    private async getEmbedding(text: string): Promise<Float32Array> {
+        if (!this._embeddingModel) {
+            throw new Error('Embedding model not initialized');
+        }
+
         try {
-            const response = await this.openai.embeddings.create({
-                input: text,
-                model: 'text-embedding-3-small', // This will use the default model from our local server
+            // Get embeddings from transformers.js
+            const result = await this._embeddingModel(text, {
+                pooling: 'mean',
+                normalize: true
             });
 
-            return response.data[0].embedding;
+            // Return as Float32Array
+            return new Float32Array(result.data);
         } catch (error) {
             console.error('Error generating embedding:', error);
-            this.embeddingFailureCount++;
+            this._embeddingFailureCount++;
             throw error;
         }
     }
 
     /**
-     * Perform a text-based search using SQLite
+     * Perform a vector search using SQLite and cosine similarity
      */
-    private async textSearch(query: string, limit: number = 3): Promise<RAGSearchResult[]> {
-        if (!this.db || !this.isInitialized || !this.hasContent) {
+    private async vectorSearch(query: string, limit: number = 3): Promise<RAGSearchResult[]> {
+        if (!this._db || !this._isInitialized || !this._hasContent || !this._embeddingModel) {
             return [];
         }
 
         try {
-            let results;
-            const searchTerms = this.prepareSearchTerms(query);
+            // Get query embedding
+            const queryEmbedding = await this.getEmbedding(query);
+            const queryArray = Array.from(queryEmbedding);
 
-            // Try to use FTS if available
-            try {
-                results = this.db.prepare(`
-          SELECT id, content,
-                 rank
-          FROM documents_fts
-          WHERE documents_fts MATCH ?
-          ORDER BY rank
-          LIMIT ?
-        `).all(searchTerms, limit) as { id: string; content: string; rank: number }[];
-            } catch (error) {
-                // Check if it's a corruption error
-                const errorMessage = String(error);
-                if (errorMessage.includes('SQLITE_CORRUPT_VTAB') ||
-                    errorMessage.includes('missing row') ||
-                    errorMessage.includes('fts5')) {
+            // Fetch all documents with their embeddings
+            // For large datasets, this would be inefficient but works for smaller ones
+            const allDocs = await this._all('SELECT id, content, metadata, embedding FROM documents');
 
-                    console.warn('FTS corruption detected, attempting to rebuild...');
+            // Calculate similarities and sort
+            const similarities: DocWithSimilarity[] = allDocs.map(doc => {
+                const embedding = JSON.parse(doc.embedding as string);
+                // Ensure similarity is always a number (fallback to 0 if null)
+                const similarity = cosineSimilarity(queryArray, embedding) || 0;
 
-                    // Try to rebuild the FTS table
-                    try {
-                        this.rebuildFtsTable();
+                return {
+                    id: doc.id as string,
+                    content: doc.content as string,
+                    metadata: doc.metadata as string,
+                    similarity
+                };
+            });
 
-                        // Try the FTS query again after rebuilding
-                        results = this.db.prepare(`
-                SELECT id, content,
-                       rank
-                FROM documents_fts
-                WHERE documents_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-              `).all(searchTerms, limit) as { id: string; content: string; rank: number }[];
+            // Sort by similarity (highest first) and take top 'limit' results
+            const topResults = similarities
+                .sort((a, b) => b.similarity - a.similarity)
+                .slice(0, limit);
 
-                        console.log('FTS table rebuilt successfully');
-                    } catch (rebuildError) {
-                        // If rebuild fails too, fall back to LIKE
-                        console.error('FTS rebuild failed, falling back to LIKE search:', rebuildError);
-                        throw rebuildError; // Propagate to LIKE fallback
-                    }
-                } else {
-                    // Other error, fall back to LIKE
-                    console.warn('FTS search failed, falling back to LIKE search:', error);
-                    throw error; // Propagate to LIKE fallback
-                }
-            }
-
-            // If we still don't have results (or error was propagated), use LIKE query
-            if (!results) {
-                // Create a series of LIKE conditions for better matching
-                const terms = query.split(/\s+/).filter(term => term.length > 3);
-
-                if (terms.length === 0) {
-                    // If no good terms, just use a simple LIKE with the whole query
-                    results = this.db.prepare(`
-            SELECT id, content
-            FROM documents
-            WHERE content LIKE ?
-            LIMIT ?
-          `).all(`%${query}%`, limit) as { id: string; content: string }[];
-                } else {
-                    // Use all filtered terms with OR conditions
-                    const likeClauses = terms.map(() => 'content LIKE ?').join(' OR ');
-                    const likeParams = terms.map(term => `%${term}%`);
-
-                    results = this.db.prepare(`
-            SELECT id, content
-            FROM documents
-            WHERE ${likeClauses}
-            LIMIT ?
-          `).all(...likeParams, limit) as { id: string; content: string }[];
-                }
-            }
-
-            // Convert results to match the expected format
-            return results.map((doc, index) => ({
-                content: doc.content,
-                similarity: 1 - (index * 0.1), // Fake similarity scores that decrease with rank
-                sourceType: 'text'
+            // Format results
+            return topResults.map(result => ({
+                content: result.content,
+                similarity: result.similarity,
+                sourceType: 'vector' as const // Set the source type to 'vector' for all results from this method
             }));
         } catch (error) {
-            console.error('Error performing text search:', error);
-            return [];
+            console.error('Error performing vector search:', error);
+            throw error;
         }
-    }
-
-    /**
-     * Prepare search terms for FTS query
-     */
-    private prepareSearchTerms(query: string): string {
-        // Extract meaningful terms and format for FTS5
-        const terms = query
-            .toLowerCase()
-            .split(/\s+/)
-            .filter(term => term.length > 3)
-            .map(term => `"${term}"*`);
-
-        return terms.join(' OR ');
     }
 
     /**
      * Search for relevant documents based on a query
      */
     public async search(query: string, limit: number = 3): Promise<RAGSearchResult[]> {
-        if (!this.db || !this.isInitialized || !this.hasContent) {
+        if (!this._db || !this._isInitialized || !this._hasContent) {
             return [];
         }
 
         try {
             // Increment search counter
-            this.searchCount++;
+            this._searchCount++;
 
-            // If we're configured to use text search or embedding fails, use text search
-            if (this.useFullTextSearch) {
-                return await this.textSearch(query, limit);
+            const results = await this.vectorSearch(query, limit);
+
+            // Increment match counter if we found results
+            if (results.length > 0) {
+                this._matchCount += results.length;
             }
 
-            // Try vector search first
-            try {
-                // Get query embedding
-                const queryEmbedding = await this.getEmbedding(query);
-
-                // Get all documents with embeddings
-                const documents = this.db.prepare(`
-          SELECT d.id, d.content, e.embedding
-          FROM documents d
-          JOIN embeddings e ON d.id = e.document_id
-        `).all() as { id: string; content: string; embedding: string }[];
-
-                // Calculate similarity scores
-                const scoredDocuments = documents.map(doc => {
-                    const docEmbedding = JSON.parse(doc.embedding) as number[];
-                    const similarity = computeCosineSimilarity(queryEmbedding, docEmbedding);
-
-                    return {
-                        id: doc.id,
-                        content: doc.content,
-                        similarity,
-                    };
-                });
-
-                // Sort by similarity and take the top results
-                const results = scoredDocuments
-                    .sort((a, b) => b.similarity - a.similarity)
-                    .slice(0, limit)
-                    .map(({ content, similarity }) => ({
-                        content,
-                        similarity,
-                        sourceType: 'vector' as const
-                    }));
-
-                // Increment match counter if we found results
-                if (results.length > 0) {
-                    this.matchCount += results.length;
-                }
-
-                return results;
-            } catch (error) {
-                console.warn('Vector search failed, falling back to text search:', error);
-                this.embeddingFailureCount++;
-                this.useFullTextSearch = true; // Switch to text search for future queries
-                return await this.textSearch(query, limit);
-            }
+            return results;
         } catch (error) {
             console.error('Error searching for documents:', error);
             return [];
@@ -568,9 +446,9 @@ export class RAGService {
      */
     public getRAGStats(): RAGStats {
         return {
-            totalSearches: this.searchCount,
-            totalMatches: this.matchCount,
-            embeddingFailures: this.embeddingFailureCount
+            totalSearches: this._searchCount,
+            totalMatches: this._matchCount,
+            embeddingFailures: this._embeddingFailureCount
         };
     }
 
@@ -578,7 +456,7 @@ export class RAGService {
      * Check if RAG has been initialized and has content
      */
     public isReady(): boolean {
-        return this.isInitialized && this.hasContent;
+        return this._isInitialized && this._hasContent;
     }
 
     /**
@@ -593,8 +471,8 @@ export class RAGService {
         this.refreshIngestedFiles();
 
         return {
-            files: [...this.ingestedFiles],
-            lastIngestTime: this.lastIngestTime,
+            files: [...this._ingestedFiles],
+            lastIngestTime: this._lastIngestTime,
             stats: this.getRAGStats()
         };
     }
@@ -604,16 +482,16 @@ export class RAGService {
      */
     private async refreshIngestedFiles(): Promise<void> {
         try {
-            if (!fs.existsSync(this.dataDir)) {
+            if (!fs.existsSync(this._dataDir)) {
                 return;
             }
 
-            const files = fs.readdirSync(this.dataDir).filter(file => file.endsWith('.csv'));
+            const files = fs.readdirSync(this._dataDir).filter(file => file.endsWith('.csv'));
             if (files.length === 0) {
                 return;
             }
 
-            const currentFiles = new Set(this.ingestedFiles.map(file => file.fileName));
+            const currentFiles = new Set(this._ingestedFiles.map(file => file.fileName));
             let hasChanges = false;
 
             // Check for new files
@@ -621,33 +499,33 @@ export class RAGService {
                 if (!currentFiles.has(file)) {
                     // New file found
                     hasChanges = true;
-                    const filePath = path.join(this.dataDir, file);
+                    const filePath = path.join(this._dataDir, file);
                     const fileStats = fs.statSync(filePath);
 
-                    if (this.isInitialized && this.db) {
+                    if (this._isInitialized && this._db) {
                         // Ingest the new file
                         console.log(`New file found: ${file}, ingesting...`);
                         await this.ingestCSV(filePath);
 
                         // Add to ingested files list
                         const ingestTime = new Date();
-                        this.ingestedFiles.push({
+                        this._ingestedFiles.push({
                             fileName: file,
                             ingestTime
                         });
 
                         // Update last ingest time
-                        this.lastIngestTime = ingestTime;
+                        this._lastIngestTime = ingestTime;
                     } else {
                         // Just record the file without ingesting
-                        this.ingestedFiles.push({
+                        this._ingestedFiles.push({
                             fileName: file,
                             ingestTime: fileStats.mtime
                         });
 
                         // Update last ingest time if needed
-                        if (!this.lastIngestTime || fileStats.mtime > this.lastIngestTime) {
-                            this.lastIngestTime = fileStats.mtime;
+                        if (!this._lastIngestTime || fileStats.mtime > this._lastIngestTime) {
+                            this._lastIngestTime = fileStats.mtime;
                         }
                     }
                 }
@@ -655,8 +533,8 @@ export class RAGService {
 
             // Check for updated file timestamps
             if (!hasChanges) {
-                for (const fileInfo of this.ingestedFiles) {
-                    const filePath = path.join(this.dataDir, fileInfo.fileName);
+                for (const fileInfo of this._ingestedFiles) {
+                    const filePath = path.join(this._dataDir, fileInfo.fileName);
                     if (fs.existsSync(filePath)) {
                         const fileStats = fs.statSync(filePath);
                         if (fileStats.mtime > fileInfo.ingestTime) {
@@ -664,18 +542,18 @@ export class RAGService {
                             hasChanges = true;
                             console.log(`File updated: ${fileInfo.fileName}, reingesting...`);
 
-                            if (this.isInitialized && this.db) {
+                            if (this._isInitialized && this._db) {
                                 // Reingest the updated file
                                 await this.ingestCSV(filePath);
 
                                 // Update timestamp
                                 fileInfo.ingestTime = new Date();
-                                this.lastIngestTime = fileInfo.ingestTime;
+                                this._lastIngestTime = fileInfo.ingestTime;
                             } else {
                                 // Just update the timestamp
                                 fileInfo.ingestTime = fileStats.mtime;
-                                if (!this.lastIngestTime || fileStats.mtime > this.lastIngestTime) {
-                                    this.lastIngestTime = fileStats.mtime;
+                                if (!this._lastIngestTime || fileStats.mtime > this._lastIngestTime) {
+                                    this._lastIngestTime = fileStats.mtime;
                                 }
                             }
                         }
@@ -685,19 +563,18 @@ export class RAGService {
 
             // Check for removed files
             const currentFileNames = new Set(files);
-            this.ingestedFiles = this.ingestedFiles.filter(fileInfo => currentFileNames.has(fileInfo.fileName));
+            this._ingestedFiles = this._ingestedFiles.filter(fileInfo => currentFileNames.has(fileInfo.fileName));
 
             // If changes were detected and we need to update last ingest time
-            if (hasChanges && this.ingestedFiles.length > 0) {
+            if (hasChanges && this._ingestedFiles.length > 0) {
                 // Find the most recent ingest time
                 const mostRecentIngestTime = new Date(Math.max(
-                    ...this.ingestedFiles.map(file => file.ingestTime.getTime())
+                    ...this._ingestedFiles.map(file => file.ingestTime.getTime())
                 ));
-                this.lastIngestTime = mostRecentIngestTime;
+                this._lastIngestTime = mostRecentIngestTime;
 
                 // Update content flag
-                const count = this.db?.prepare('SELECT COUNT(*) as count FROM documents').get() as { count: number };
-                this.hasContent = count.count > 0;
+                this._hasContent = this._documentStore.size > 0;
             }
         } catch (error) {
             console.error('Error refreshing ingested files:', error);
@@ -707,10 +584,19 @@ export class RAGService {
     /**
      * Close the database connection
      */
-    public close(): void {
-        if (this.db) {
-            this.db.close();
-            this.db = null;
+    public async close(): Promise<void> {
+        if (this._db) {
+            return new Promise((resolve, reject) => {
+                this._db?.close((err) => {
+                    if (err) {
+                        console.error('Error closing database:', err);
+                        reject(err);
+                    } else {
+                        this._db = null;
+                        resolve();
+                    }
+                });
+            });
         }
     }
 }
