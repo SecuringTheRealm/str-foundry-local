@@ -109,37 +109,42 @@ const MessageItem = ({ message }: MessageItemProps) => {
               <div className="ml-auto relative group">
                 <div className="w-5 h-5 rounded-full bg-[#FFB314] bg-opacity-20 flex items-center justify-center text-[#FF5800] cursor-help">
                   <span className="text-xs font-bold">i</span>
-                  <div className="absolute z-10 right-0 mt-1 w-max max-w-[200px] bg-white border border-[#E5E5E5] rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2 text-xs text-[#666666]">
+                  <div className="absolute z-10 right-0 top-6 w-max max-w-[300px] bg-white border border-[#E5E5E5] rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2 text-xs text-[#666666]">
                     <p className="font-medium text-[#FF5800] mb-1">
                       Document References:
                     </p>
-                    <ul className="space-y-1">
-                      {ragReferences?.map((ref, index) => (
-                        <li key={index} className="flex flex-col">
-                          <span className="font-medium">
-                            {ref.documentName}
-                          </span>
-                          <span className="text-[#999999]">
-                            Row ID: {ref.rowId}
-                          </span>
-                          <span className="text-[#999999]">
-                            Match: {Math.round(ref.similarity * 100)}%
-                          </span>
-                          <span
-                            className={`text-xs ${
-                              ref.sourceType === "vector"
-                                ? "text-[#008376]"
-                                : "text-[#47800A]"
-                            }`}
+                    <div className="max-h-[200px] overflow-y-auto pr-1 custom-scrollbar">
+                      <ul className="space-y-2">
+                        {ragReferences?.map((ref, index) => (
+                          <li
+                            key={index}
+                            className="flex flex-col border-b border-[#E5E5E5] pb-2 last:border-b-0"
                           >
-                            Source:{" "}
-                            {ref.sourceType === "vector"
-                              ? "Vector search"
-                              : "Text search"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                            <span className="font-medium">
+                              {ref.documentName}
+                            </span>
+                            <span className="text-[#999999]">
+                              Row ID: {ref.rowId}
+                            </span>
+                            <span className="text-[#999999]">
+                              Match: {Math.round(ref.similarity * 100)}%
+                            </span>
+                            <span
+                              className={`text-xs ${
+                                ref.sourceType === "vector"
+                                  ? "text-[#008376]"
+                                  : "text-[#47800A]"
+                              }`}
+                            >
+                              Source:{" "}
+                              {ref.sourceType === "vector"
+                                ? "Vector search"
+                                : "Text search"}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -150,7 +155,7 @@ const MessageItem = ({ message }: MessageItemProps) => {
               <div className="ml-auto relative group">
                 <div className="w-5 h-5 rounded-full bg-[#E5E5E5] flex items-center justify-center text-[#666666] cursor-help">
                   <span className="text-xs font-bold">?</span>
-                  <div className="absolute z-10 right-0 mt-1 w-max max-w-[200px] bg-white border border-[#E5E5E5] rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2 text-xs text-[#666666]">
+                  <div className="absolute z-10 right-0 top-6 w-max max-w-[200px] bg-white border border-[#E5E5E5] rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 p-2 text-xs text-[#666666]">
                     <p className="font-medium text-[#666666] mb-1">
                       RAG Search Info:
                     </p>
