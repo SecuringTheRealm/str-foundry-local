@@ -169,16 +169,38 @@ export class RAGService {
             }
 
             // Create database schema if it doesn't exist
-            await this._runQuery(`
-                CREATE TABLE IF NOT EXISTS documents (
-                    id TEXT PRIMARY KEY,
-                    content TEXT NOT NULL,
-                    metadata TEXT NOT NULL,
-                    embedding TEXT NOT NULL
+            try {
+                // First create the table
+                await this._runQuery(`
+                    CREATE TABLE IF NOT EXISTS documents (
+                        id TEXT PRIMARY KEY,
+                        content TEXT NOT NULL,
+                        metadata TEXT NOT NULL,
+                        embedding TEXT NOT NULL
+                    )
+                `);
+
+                // Then create the index as a separate statement
+                await this._runQuery(`
+                    CREATE INDEX IF NOT EXISTS idx_documents_id ON documents(id)
+                `);
+
+                // Check if embedding column exists (may be missing in existing databases)
+                const tableInfo = await this._all("PRAGMA table_info(documents)");
+                const hasEmbeddingColumn = tableInfo.some((col: any) =>
+                    col.name === 'embedding'
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_documents_id ON documents(id);
-            `);
+                if (!hasEmbeddingColumn) {
+                    console.log('Adding missing embedding column to documents table');
+                    await this._runQuery(`ALTER TABLE documents ADD COLUMN embedding TEXT`);
+                    // Force regeneration since we need to add embeddings
+                    regenerateStore = true;
+                }
+            } catch (error) {
+                console.error('Error creating schema:', error);
+                return false;
+            }
 
             // Create or load the vector store
             if (regenerateStore) {
