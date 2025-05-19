@@ -1,25 +1,25 @@
 # Foundry Local
-> A web application for running local SLMs (small language models) using Neutron Server and Foundry Client with local vector search capabilities.
+> A web application for running local SLMs (small language models) using Neutron Server and [Foundry Local](https://github.com/microsoft/Foundry-Local) Client with local vector search capabilities.
 
 <!-- Javascript -->
 [![JavaScript Style Guide](https://img.shields.io/badge/code_style-standard-brightgreen.svg)](https://standardjs.com)
 [![Commitizen friendly](https://img.shields.io/badge/commitizen-friendly-brightgreen.svg)](http://commitizen.github.io/cz-cli/)
-![GitHub issues](https://img.shields.io/github/issues/sealjay/dating-rulebook)
-![GitHub](https://img.shields.io/github/license/sealjay/dating-rulebook)
-![GitHub Repo stars](https://img.shields.io/github/stars/sealjay/dating-rulebook?style=social)
+![GitHub issues](https://img.shields.io/github/issues/SecuringTheRealm/str-foundry-local)
+![GitHub](https://img.shields.io/github/license/SecuringTheRealm/str-foundry-local)
+![GitHub Repo stars](https://img.shields.io/github/stars/SecuringTheRealm/str-foundry-local?style=social)
 [![TypeScript](https://img.shields.io/badge/--3178C6?logo=typescript&logoColor=ffffff)](https://www.typescriptlang.org/)
 [![Azure](https://img.shields.io/badge/--3178C6?logo=microsoftazure&logoColor=ffffff)](https://learn.microsoft.com/en-us/azure/developer/azure-developer-cli/?WT.mc_id=AI-MVP-5004204)
 [![React](https://img.shields.io/badge/--3178C6?logo=react&logoColor=ffffff)](https://reactjs.org/)
 
 ## About the App
 
-Foundry Local provides a seamless interface for local LLM inference. It combines:
+This app uses [Foundry Local](https://github.com/microsoft/Foundry-Local). Foundry Local provides a seamless interface for local LLM inference. It combines:
 - **Neutron Server** (Inference.Service.Agent) for model processing
 - **Foundry Client** for handling requests
 - **Local vector search** using sqlite-vec and transformers.js for embeddings
 - A **Next.js frontend** for a user-friendly interaction experience
 
-With Foundry Local, you can run powerful language models directly on your machine without requiring cloud services, providing privacy, lower latency, and no usage costs.
+[With Foundry Local](https://github.com/microsoft/Foundry-Local), you can run powerful language models directly on your machine without requiring cloud services, providing privacy, lower latency, and no usage costs.
 
 ## Knowledge Features
 
