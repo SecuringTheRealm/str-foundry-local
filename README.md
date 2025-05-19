@@ -21,6 +21,10 @@ This app uses [Foundry Local](https://github.com/microsoft/Foundry-Local). Found
 
 [With Foundry Local](https://github.com/microsoft/Foundry-Local), you can run powerful language models directly on your machine without requiring cloud services, providing privacy, lower latency, and no usage costs.
 
+## Associated Content
+- [YouTube video](https://youtu.be/FKG8-H6RVDU?si=k3D8CTsZu9Bs5XO4)
+- [Microsoft Announcement](https://devblogs.microsoft.com/foundry/unlock-instant-on-device-ai-with-foundry-local/?WT.mc_id=AI-MVP-5004204)
+
 ## Knowledge Features
 
 The application includes a RAG (Retrieval-Augmented Generation) system that:
